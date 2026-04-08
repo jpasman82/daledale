@@ -5,7 +5,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="es">
       <body className="flex">
         <nav className="w-64 min-h-screen bg-slate-900 text-white p-6 space-y-4">
-          <h2 className="text-xl font-bold mb-8 text-blue-400">DALED Admin</h2>
+          <div className="mb-8 flex flex-col items-center">
+            <img 
+              src="/logo-daled.png" 
+              alt="DALED Logo" 
+              className="w-32 h-auto mb-2"
+            />
+            <div className="h-1 w-full bg-blue-400 rounded-full opacity-50"></div>
+          </div>
+
           <div className="flex flex-col space-y-2">
             <a href="/" className="hover:text-blue-300">📊 Monitor Global</a>
             
