@@ -9,7 +9,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <img 
               src="/logo-daled.png" 
               alt="DALED Logo" 
-              className="w-32 h-auto mb-2"
+              className="w-48 h-auto mb-2"
             />
             <div className="h-1 w-full bg-blue-400 rounded-full opacity-50"></div>
           </div>
