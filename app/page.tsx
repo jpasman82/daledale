@@ -1,15 +1,17 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
 export default function MonitorGlobal() {
-  const [cargando, setCargando] = useState(true)
+  const [cargandoInicial, setCargandoInicial] = useState(true)
+  const [actualizando, setActualizando] = useState(false)
   const [tcGlobal, setTcGlobal] = useState<Record<string, number>>({})
   const [datosTabla, setDatosTabla] = useState<any[]>([])
   const [mesesColumnas, setMesesColumnas] = useState<string[]>([])
+  const [mensaje, setMensaje] = useState({ tipo: '', texto: '' })
   const [vistaDetalle, setVistaDetalle] = useState<{abierto: boolean, tipo: string, mes: string, items: any[]}>({
     abierto: false, tipo: '', mes: '', items: []
   })
@@ -21,8 +23,10 @@ export default function MonitorGlobal() {
     cajaHistorica: 0
   })
 
-  const cargarDatos = async () => {
-    setCargando(true)
+  // Función de carga de datos optimizada
+  const cargarDatos = useCallback(async (silencioso = false) => {
+    if (!silencioso) setCargandoInicial(true);
+    else setActualizando(true);
 
     const [resTC, resVentas, resDeudas, resGastos] = await Promise.all([
       supabase.from('proyecciones_tc').select('*'),
@@ -39,6 +43,7 @@ export default function MonitorGlobal() {
     const columnas: string[] = []
     const matriz: Record<string, any> = {}
 
+    // Generamos 12 meses
     for (let i = 0; i < 12; i++) {
       const d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1)
       const llave = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -56,6 +61,7 @@ export default function MonitorGlobal() {
     let totalGastos = 0
     let cajaHistorica = 0
 
+    // Lógica de Ingresos
     resVentas.data?.forEach(v => {
       const pendiente = parseFloat(v.monto_neto || 0) - parseFloat(v.monto_cobrado || 0)
       cajaHistorica += parseFloat(v.monto_cobrado || 0)
@@ -72,6 +78,7 @@ export default function MonitorGlobal() {
       }
     })
 
+    // Lógica de Deudas
     resDeudas.data?.forEach(d => {
       const pendiente = (parseFloat(d.monto_neto || 0) + parseFloat(d.interes || 0)) - parseFloat(d.monto_pagado || 0)
       cajaHistorica -= parseFloat(d.monto_pagado || 0)
@@ -87,6 +94,7 @@ export default function MonitorGlobal() {
       }
     })
 
+    // Lógica de Gastos
     resGastos.data?.forEach(g => {
       const pendiente = parseFloat(g.monto_proyectado || 0) - parseFloat(g.monto_real_pagado || 0)
       cajaHistorica -= parseFloat(g.monto_real_pagado || 0)
@@ -114,18 +122,30 @@ export default function MonitorGlobal() {
     setKpis({ aCobrar: totalACobrar, deudasAPagar: totalDeudas, gastosPendientes: totalGastos, cajaHistorica })
     setMesesColumnas(columnas)
     setDatosTabla(tablaFinal)
-    setCargando(false)
-  }
+    setCargandoInicial(false)
+    setActualizando(false)
+  }, []);
 
   useEffect(() => {
     cargarDatos()
-  }, [])
+  }, [cargarDatos])
 
   const actualizarTC = async (mes: string, valor: string) => {
     const num = parseFloat(valor)
     if (isNaN(num)) return
-    await supabase.from('proyecciones_tc').upsert({ mes_anio: mes, tc_proyectado: num }, { onConflict: 'mes_anio' })
-    cargarDatos()
+    
+    // Guardado silencioso en la base de datos
+    const { error } = await supabase
+      .from('proyecciones_tc')
+      .upsert({ mes_anio: mes, tc_proyectado: num }, { onConflict: 'mes_anio' })
+
+    if (error) {
+      setMensaje({ tipo: 'error', texto: `Error al guardar TC: ${error.message}` })
+      setTimeout(() => setMensaje({ tipo: '', texto: '' }), 3000)
+    } else {
+      // Recargamos datos de forma silenciosa para que la UI no salte
+      cargarDatos(true)
+    }
   }
 
   const formatearMoneda = (valor: number) => {
@@ -138,8 +158,10 @@ export default function MonitorGlobal() {
     return fecha.toLocaleDateString('es-AR', { month: 'short', year: 'numeric' }).toUpperCase()
   }
 
-  if (cargando) return <div className="p-10 text-center font-bold text-gray-500">Sincronizando flujos financieros...</div>
+  // Si es la primera carga, mostramos el splash completo
+  if (cargandoInicial) return <div className="p-10 text-center font-bold text-gray-500">Iniciando Monitor Financiero...</div>
 
+  // Lógica de Gráfico
   const maxAcumulado = Math.max(...datosTabla.map(d => d.acumulado), 1)
   const minAcumulado = Math.min(...datosTabla.map(d => d.acumulado), 0)
   const rangoAcumulado = maxAcumulado - minAcumulado || 1
@@ -159,8 +181,20 @@ export default function MonitorGlobal() {
   return (
     <main className="p-8 bg-gray-50 min-h-screen">
       <div className="max-w-[1500px] mx-auto">
-        <h1 className="text-3xl font-black text-gray-800 mb-8">Monitor Global Detallado</h1>
+        
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-black text-gray-800">Monitor Global Detallado</h1>
+          <div className="flex items-center gap-4">
+            {actualizando && <span className="text-xs font-bold text-blue-500 animate-pulse">Sincronizando...</span>}
+            {mensaje.texto && (
+              <div className={`px-4 py-1 rounded text-xs font-bold ${mensaje.tipo === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white'}`}>
+                {mensaje.texto}
+              </div>
+            )}
+          </div>
+        </div>
 
+        {/* KPIs */}
         <div className="grid grid-cols-4 gap-6 mb-8">
           <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-blue-500">
             <p className="text-sm text-gray-500 font-bold uppercase mb-1">A Cobrar</p>
@@ -180,21 +214,28 @@ export default function MonitorGlobal() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-md overflow-hidden border border-gray-200 mb-8 overflow-x-auto">
+        {/* TABLA HORIZONTAL */}
+        <div className="bg-white rounded-xl shadow-md border border-gray-200 mb-8 overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-900 text-white">
               <tr>
                 <th className="py-4 px-6 text-left font-bold sticky left-0 bg-slate-900 z-20 border-r border-slate-700">Conceptos</th>
                 {mesesColumnas.map(llave => (
-                  <th key={llave} className="py-4 px-6 text-center border-l border-slate-700 min-w-[140px]">
+                  <th key={llave} className="py-4 px-6 text-center border-l border-slate-700 min-w-[150px]">
                     <div className="text-blue-400 font-black">{nombreMes(llave)}</div>
-                    <input 
-                      type="number" 
-                      defaultValue={tcGlobal[llave] || 1000}
-                      onBlur={(e) => actualizarTC(llave, e.target.value)}
-                      className="mt-2 w-full bg-slate-800 border-none text-[10px] text-center rounded text-green-400 font-bold focus:ring-1 focus:ring-green-400 p-1"
-                      placeholder="TC USD"
-                    />
+                    <div className="mt-2 flex flex-col items-center">
+                      <span className="text-[9px] uppercase text-slate-400 font-bold">TC Proyectado</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-green-400 font-bold text-xs">$</span>
+                        <input 
+                          type="number" 
+                          key={`tc-${llave}-${tcGlobal[llave]}`} // Forzamos remount solo del input si cambia el valor
+                          defaultValue={tcGlobal[llave] || 1000}
+                          onBlur={(e) => actualizarTC(llave, e.target.value)}
+                          className="w-20 bg-slate-800 border-none text-xs text-center rounded text-green-400 font-bold focus:ring-1 focus:ring-green-400 p-1"
+                        />
+                      </div>
+                    </div>
                   </th>
                 ))}
               </tr>
@@ -234,8 +275,9 @@ export default function MonitorGlobal() {
           </table>
         </div>
 
+        {/* GRÁFICO SVG */}
         <div className="bg-white p-8 rounded-xl shadow-md border border-gray-200 mb-8">
-          <h2 className="text-xl font-bold text-gray-800 mb-8">Evolución de Caja Proyectada</h2>
+          <h2 className="text-xl font-bold text-gray-800 mb-8 text-center">Evolución de Caja Proyectada</h2>
           <div className="w-full overflow-x-auto">
             <svg viewBox={`-20 -20 ${anchoGrafico + 40} ${altoGrafico + 40}`} className="w-full min-w-[1000px] h-72 overflow-visible">
               <line x1="-20" y1={ejeYZero} x2={anchoGrafico + 20} y2={ejeYZero} stroke="#e2e8f0" strokeWidth="2" strokeDasharray="5,5" />
@@ -255,13 +297,14 @@ export default function MonitorGlobal() {
           </div>
         </div>
 
+        {/* MODAL DETALLE */}
         {vistaDetalle.abierto && (
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
               <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
                 <div>
                   <h3 className="text-xl font-bold">Desglose: {vistaDetalle.tipo}</h3>
-                  <p className="text-blue-400 text-sm font-bold">{nombreMes(vistaDetalle.mes)}</p>
+                  <p className="text-blue-400 text-sm font-bold uppercase">{nombreMes(vistaDetalle.mes)}</p>
                 </div>
                 <button onClick={() => setVistaDetalle({...vistaDetalle, abierto: false})} className="bg-slate-800 hover:bg-slate-700 p-2 rounded-full transition-colors text-xl w-10 h-10">✕</button>
               </div>
@@ -271,20 +314,20 @@ export default function MonitorGlobal() {
                     <tr>
                       <th className="py-3 px-2 text-xs font-bold text-gray-400 uppercase">Referencia / Entidad</th>
                       <th className="py-3 px-2 text-xs font-bold text-gray-400 uppercase">Comprobante</th>
-                      <th className="py-3 px-2 text-right text-xs font-bold text-gray-400 uppercase">Original</th>
-                      <th className="py-3 px-2 text-right text-xs font-bold text-gray-400 uppercase">A Cobrar/Pagar</th>
+                      <th className="py-3 px-2 text-right text-xs font-bold text-gray-400 uppercase">Pendiente Orig.</th>
+                      <th className="py-3 px-2 text-right text-xs font-bold text-gray-400 uppercase">Pesificado ($)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {vistaDetalle.items.map((it, idx) => {
-                      const montoOrig = it.monto_neto || it.monto_proyectado
-                      const pagado = it.monto_cobrado || it.monto_pagado || 0
+                      const montoOrig = (it.monto_neto || it.monto_proyectado) + (it.interes || 0) - (it.monto_cobrado || it.monto_pagado || 0)
+                      const montoPesificado = it.moneda === 'ARS' ? montoOrig : montoOrig * (tcGlobal[vistaDetalle.mes] || 1000)
                       return (
                         <tr key={idx} className="hover:bg-slate-50">
                           <td className="py-4 px-2 font-bold text-slate-800">{it.cliente?.nombre || it.acreedor?.nombre || it.concepto}</td>
                           <td className="py-4 px-2 text-slate-500">{it.nro_factura || it.nro_comprobante || it.categoria}</td>
                           <td className="py-4 px-2 text-right text-slate-400 font-medium">{it.moneda} {montoOrig?.toLocaleString()}</td>
-                          <td className="py-4 px-2 text-right font-black text-slate-900">{it.moneda} {(montoOrig - pagado).toLocaleString()}</td>
+                          <td className="py-4 px-2 text-right font-black text-slate-900">{formatearMoneda(montoPesificado)}</td>
                         </tr>
                       )
                     })}
